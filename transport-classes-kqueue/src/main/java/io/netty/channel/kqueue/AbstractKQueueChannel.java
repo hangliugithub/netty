@@ -38,6 +38,7 @@ import io.netty.channel.unix.FileDescriptor;
 import io.netty.channel.unix.UnixChannel;
 import io.netty.util.ReferenceCountUtil;
 import io.netty.util.concurrent.Future;
+import io.netty.util.internal.UnstableApi;
 
 import java.io.IOException;
 import java.net.ConnectException;
@@ -161,7 +162,11 @@ abstract class AbstractKQueueChannel extends AbstractChannel implements UnixChan
         // Make sure we unregister our filters from kqueue!
         readFilter(false);
         writeFilter(false);
-        evSet0(Native.EVFILT_SOCK, Native.EV_DELETE, 0);
+        clearRdHup0();
+    }
+
+    private void clearRdHup0() {
+        evSet0(Native.EVFILT_SOCK, Native.EV_DELETE_DISABLE, Native.NOTE_RDHUP);
     }
 
     @Override
@@ -363,7 +368,8 @@ abstract class AbstractKQueueChannel extends AbstractChannel implements UnixChan
         }
     }
 
-    abstract class AbstractKQueueUnsafe extends AbstractUnsafe {
+    @UnstableApi
+    public abstract class AbstractKQueueUnsafe extends AbstractUnsafe {
         boolean readPending;
         boolean maybeMoreDataToRead;
         private KQueueRecvByteAllocatorHandle allocHandle;
@@ -461,11 +467,12 @@ abstract class AbstractKQueueChannel extends AbstractChannel implements UnixChan
                         // We attempted to shutdown and failed, which means the input has already effectively been
                         // shutdown.
                     }
+                    clearReadFilter0();
                     pipeline().fireUserEventTriggered(ChannelInputShutdownEvent.INSTANCE);
                 } else {
                     close(voidPromise());
                 }
-            } else if (!readEOF) {
+            } else if (!readEOF && !inputClosedSeenErrorOnRead) {
                 inputClosedSeenErrorOnRead = true;
                 pipeline().fireUserEventTriggered(ChannelInputShutdownReadComplete.INSTANCE);
             }
@@ -485,6 +492,9 @@ abstract class AbstractKQueueChannel extends AbstractChannel implements UnixChan
                 // Just to be safe make sure the input marked as closed.
                 shutdownInput(true);
             }
+
+            // Clear the RDHUP flag to prevent continuously getting woken up on this event.
+            clearRdHup0();
         }
 
         @Override

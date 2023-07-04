@@ -19,6 +19,7 @@ import io.netty.util.AsciiString;
 import io.netty.util.ByteProcessor;
 import io.netty.util.CharsetUtil;
 import io.netty.util.IllegalReferenceCountException;
+import io.netty.util.Recycler.EnhancedHandle;
 import io.netty.util.concurrent.FastThreadLocal;
 import io.netty.util.internal.MathUtil;
 import io.netty.util.internal.ObjectPool;
@@ -279,7 +280,7 @@ public final class ByteBufUtil {
                         --i;
                     }
                     if (i <= memory) {
-                        return j;
+                        return j + bStartIndex;
                     }
                     j += per;
                     memory = m - per - 1;
@@ -304,7 +305,7 @@ public final class ByteBufUtil {
                         --i;
                     }
                     if (i < 0) {
-                        return j;
+                        return j + bStartIndex;
                     }
                     j += per;
                 } else {
@@ -692,6 +693,24 @@ public final class ByteBufUtil {
     }
 
     /**
+     * Reads a big-endian unsigned 16-bit short integer from the buffer.
+     */
+    @SuppressWarnings("deprecation")
+    public static int readUnsignedShortBE(ByteBuf buf) {
+        return buf.order() == ByteOrder.BIG_ENDIAN? buf.readUnsignedShort() :
+                swapShort((short) buf.readUnsignedShort()) & 0xFFFF;
+    }
+
+    /**
+     * Reads a big-endian 32-bit integer from the buffer.
+     */
+    @SuppressWarnings("deprecation")
+    public static int readIntBE(ByteBuf buf) {
+        return buf.order() == ByteOrder.BIG_ENDIAN? buf.readInt() :
+                swapInt(buf.readInt());
+    }
+
+    /**
      * Read the given amount of bytes into a new {@link ByteBuf} that is allocated from the {@link ByteBufAllocator}.
      */
     public static ByteBuf readBytes(ByteBufAllocator alloc, ByteBuf buffer, int length) {
@@ -1068,6 +1087,9 @@ public final class ByteBufUtil {
      * It behaves like {@link #utf8MaxBytes(int)} applied to {@code seq} {@link CharSequence#length()}.
      */
     public static int utf8MaxBytes(CharSequence seq) {
+        if (seq instanceof AsciiString) {
+            return seq.length();
+        }
         return utf8MaxBytes(seq.length());
     }
 
@@ -1187,9 +1209,16 @@ public final class ByteBufUtil {
         }
     }
 
-    // Fast-Path implementation
     static int writeAscii(AbstractByteBuf buffer, int writerIndex, CharSequence seq, int len) {
+        if (seq instanceof AsciiString) {
+            writeAsciiString(buffer, writerIndex, (AsciiString) seq, 0, len);
+        } else {
+            writeAsciiCharSequence(buffer, writerIndex, seq, len);
+        }
+        return len;
+    }
 
+    private static int writeAsciiCharSequence(AbstractByteBuf buffer, int writerIndex, CharSequence seq, int len) {
         // We can use the _set methods as these not need to do any index checks and reference checks.
         // This is possible as we called ensureWritable(...) before.
         for (int i = 0; i < len; i++) {
@@ -1622,11 +1651,11 @@ public final class ByteBufUtil {
             return buf;
         }
 
-        private final Handle<ThreadLocalUnsafeDirectByteBuf> handle;
+        private final EnhancedHandle<ThreadLocalUnsafeDirectByteBuf> handle;
 
         private ThreadLocalUnsafeDirectByteBuf(Handle<ThreadLocalUnsafeDirectByteBuf> handle) {
             super(UnpooledByteBufAllocator.DEFAULT, 256, Integer.MAX_VALUE);
-            this.handle = handle;
+            this.handle = (EnhancedHandle<ThreadLocalUnsafeDirectByteBuf>) handle;
         }
 
         @Override
@@ -1635,7 +1664,7 @@ public final class ByteBufUtil {
                 super.deallocate();
             } else {
                 clear();
-                handle.recycle(this);
+                handle.unguardedRecycle(this);
             }
         }
     }
@@ -1656,11 +1685,11 @@ public final class ByteBufUtil {
             return buf;
         }
 
-        private final Handle<ThreadLocalDirectByteBuf> handle;
+        private final EnhancedHandle<ThreadLocalDirectByteBuf> handle;
 
         private ThreadLocalDirectByteBuf(Handle<ThreadLocalDirectByteBuf> handle) {
             super(UnpooledByteBufAllocator.DEFAULT, 256, Integer.MAX_VALUE);
-            this.handle = handle;
+            this.handle = (EnhancedHandle<ThreadLocalDirectByteBuf>) handle;
         }
 
         @Override
@@ -1669,7 +1698,7 @@ public final class ByteBufUtil {
                 super.deallocate();
             } else {
                 clear();
-                handle.recycle(this);
+                handle.unguardedRecycle(this);
             }
         }
     }
